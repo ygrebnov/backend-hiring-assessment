@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	adsdao "github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/dao"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/domain"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/usecase"
@@ -33,6 +34,7 @@ func TestHandlerGetAd(t *testing.T) {
 			Price:     15000,
 			PhotoURL:  "https://example.com/bike.jpg",
 			UserID:    "user-1",
+			UserName:  "alice",
 			CreatedAt: createdAt,
 		}
 		srv := newGetAdServer(func(_ context.Context, id domain.AdID) (domain.Ad, error) {
@@ -54,6 +56,7 @@ func TestHandlerGetAd(t *testing.T) {
 		assert.Equal(t, int64(15000), got.PriceCents)
 		assert.Equal(t, "https://example.com/bike.jpg", got.PhotoURL)
 		assert.Equal(t, "user-1", got.UserID)
+		assert.Equal(t, "alice", got.UserName)
 		assert.Equal(t, createdAt, got.CreatedAt)
 	})
 
