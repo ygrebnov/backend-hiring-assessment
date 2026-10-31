@@ -23,6 +23,10 @@ type DAO interface {
 	Store
 	// Begin opens a transaction. Every call made on the returned Tx is part of it, and the caller must end it with Commit or Rollback.
 	Begin(ctx context.Context) (Tx, error)
+
+	// ImportAds atomically inserts all ads and returns their generated IDs.
+	// If any insert fails, no ads are persisted.
+	ImportAds(ctx context.Context, req ImportAdsRequest) ([]domain.AdID, error)
 }
 
 // Tx is a Store scoped to an opened transaction.
@@ -50,6 +54,13 @@ type CreateAdRequest struct {
 	OwnerID    domain.UserID
 }
 
+type ImportAdsRequest struct {
+	OwnerID        domain.UserID
+	Ads            []CreateAdRequest
+	IdempotencyKey string
+	RequestHash    string
+}
+
 const (
 	// ErrNotFound is returned when no ad matches the requested identifier.
 	ErrNotFound sentinelError = "ad not found"
@@ -57,6 +68,9 @@ const (
 	ErrUnknownOwner sentinelError = "unknown owner"
 	// ErrForbidden is returned when a user attempts to modify an ad they do not own.
 	ErrForbidden sentinelError = "forbidden"
+	// ErrIdempotencyConflict is returned when an idempotency key is reused
+	// with a different request payload.
+	ErrIdempotencyConflict sentinelError = "idempotency key conflict"
 )
 
 type sentinelError string

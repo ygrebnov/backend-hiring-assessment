@@ -378,3 +378,292 @@ func TestTransaction(t *testing.T) {
 		require.Error(t, dao.Rollback())
 	})
 }
+
+func TestImportAds(t *testing.T) {
+	ctx := context.Background()
+
+	ownerID := domain.UserID("00000000-0000-0000-0000-000000000001")
+
+	ads := []adsdao.CreateAdRequest{
+		{
+			Title:      "mountain bike",
+			PriceCents: 15050,
+			PhotoURL:   "https://example.com/bike.jpg",
+			OwnerID:    ownerID,
+		},
+		{
+			Title:      "scooter",
+			PriceCents: 12061,
+			PhotoURL:   "https://example.com/scooter.jpg",
+			OwnerID:    ownerID,
+		},
+	}
+
+	expectInsert := func(mock sqlmock.Sqlmock, ad adsdao.CreateAdRequest, id int64) {
+		mock.ExpectQuery("INSERT INTO ads").
+			WithArgs(ad.Title, ad.PriceCents, ad.PhotoURL, string(ad.OwnerID)).
+			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(id))
+	}
+
+	t.Run("imports all ads atomically without idempotency key", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		mock.ExpectBegin()
+		expectInsert(mock, ads[0], 101)
+		expectInsert(mock, ads[1], 102)
+		mock.ExpectCommit()
+
+		ids, err := dao.ImportAds(ctx, adsdao.ImportAdsRequest{
+			OwnerID: ownerID,
+			Ads:     ads,
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, []domain.AdID{101, 102}, ids)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("imports all ads and stores idempotency result", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		mock.ExpectBegin()
+
+		mock.ExpectQuery("INSERT INTO ad_imports").
+			WithArgs(string(ownerID), "import-123", "hash-abc").
+			WillReturnRows(
+				sqlmock.NewRows([]string{"idempotency_key"}).
+					AddRow("import-123"),
+			)
+
+		expectInsert(mock, ads[0], 101)
+		expectInsert(mock, ads[1], 102)
+
+		mock.ExpectExec("UPDATE ad_imports").
+			WithArgs(
+				string(ownerID),
+				"import-123",
+				adIDs{101, 102},
+			).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+
+		mock.ExpectCommit()
+
+		ids, err := dao.ImportAds(ctx, adsdao.ImportAdsRequest{
+			OwnerID:        ownerID,
+			Ads:            ads,
+			IdempotencyKey: "import-123",
+			RequestHash:    "hash-abc",
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, []domain.AdID{101, 102}, ids)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("returns previous IDs when idempotency key and payload match", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		mock.ExpectBegin()
+
+		mock.ExpectQuery("INSERT INTO ad_imports").
+			WithArgs(string(ownerID), "import-123", "hash-abc").
+			WillReturnRows(sqlmock.NewRows([]string{"idempotency_key"}))
+
+		mock.ExpectQuery("SELECT request_hash, ad_ids").
+			WithArgs(string(ownerID), "import-123").
+			WillReturnRows(
+				sqlmock.NewRows([]string{"request_hash", "ad_ids"}).
+					AddRow("hash-abc", "{101,102}"),
+			)
+
+		mock.ExpectRollback()
+
+		ids, err := dao.ImportAds(ctx, adsdao.ImportAdsRequest{
+			OwnerID:        ownerID,
+			Ads:            ads,
+			IdempotencyKey: "import-123",
+			RequestHash:    "hash-abc",
+		})
+
+		require.NoError(t, err)
+		assert.Equal(t, []domain.AdID{101, 102}, ids)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("returns conflict when idempotency key is reused with different payload", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		mock.ExpectBegin()
+
+		mock.ExpectQuery("INSERT INTO ad_imports").
+			WithArgs(string(ownerID), "import-123", "hash-new").
+			WillReturnRows(sqlmock.NewRows([]string{"idempotency_key"}))
+
+		mock.ExpectQuery("SELECT request_hash, ad_ids").
+			WithArgs(string(ownerID), "import-123").
+			WillReturnRows(
+				sqlmock.NewRows([]string{"request_hash", "ad_ids"}).
+					AddRow("hash-original", "{101,102}"),
+			)
+
+		mock.ExpectRollback()
+
+		_, err := dao.ImportAds(ctx, adsdao.ImportAdsRequest{
+			OwnerID:        ownerID,
+			Ads:            ads,
+			IdempotencyKey: "import-123",
+			RequestHash:    "hash-new",
+		})
+
+		require.ErrorIs(t, err, adsdao.ErrIdempotencyConflict)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rolls back all inserts when one ad fails", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		boom := errors.New("insert failed")
+
+		mock.ExpectBegin()
+		expectInsert(mock, ads[0], 101)
+
+		mock.ExpectQuery("INSERT INTO ads").
+			WithArgs(
+				ads[1].Title,
+				ads[1].PriceCents,
+				ads[1].PhotoURL,
+				string(ads[1].OwnerID),
+			).
+			WillReturnError(boom)
+
+		mock.ExpectRollback()
+
+		ids, err := dao.ImportAds(ctx, adsdao.ImportAdsRequest{
+			OwnerID: ownerID,
+			Ads:     ads,
+		})
+
+		require.ErrorIs(t, err, boom)
+		assert.Nil(t, ids)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rolls back when claiming idempotency key fails", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		boom := errors.New("database unavailable")
+
+		mock.ExpectBegin()
+
+		mock.ExpectQuery("INSERT INTO ad_imports").
+			WithArgs(string(ownerID), "import-123", "hash-abc").
+			WillReturnError(boom)
+
+		mock.ExpectRollback()
+
+		ids, err := dao.ImportAds(ctx, adsdao.ImportAdsRequest{
+			OwnerID:        ownerID,
+			Ads:            ads,
+			IdempotencyKey: "import-123",
+			RequestHash:    "hash-abc",
+		})
+
+		require.ErrorIs(t, err, boom)
+		assert.Nil(t, ids)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rolls back when saving idempotency result fails", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		boom := errors.New("update failed")
+
+		mock.ExpectBegin()
+
+		mock.ExpectQuery("INSERT INTO ad_imports").
+			WithArgs(string(ownerID), "import-123", "hash-abc").
+			WillReturnRows(
+				sqlmock.NewRows([]string{"idempotency_key"}).
+					AddRow("import-123"),
+			)
+
+		expectInsert(mock, ads[0], 101)
+		expectInsert(mock, ads[1], 102)
+
+		mock.ExpectExec("UPDATE ad_imports").
+			WithArgs(
+				string(ownerID),
+				"import-123",
+				"{101,102}",
+			).
+			WillReturnError(boom)
+
+		mock.ExpectRollback()
+
+		ids, err := dao.ImportAds(ctx, adsdao.ImportAdsRequest{
+			OwnerID:        ownerID,
+			Ads:            ads,
+			IdempotencyKey: "import-123",
+			RequestHash:    "hash-abc",
+		})
+
+		require.ErrorIs(t, err, boom)
+		assert.Nil(t, ids)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("returns error when transaction commit fails", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		boom := errors.New("commit failed")
+
+		mock.ExpectBegin()
+		expectInsert(mock, ads[0], 101)
+		expectInsert(mock, ads[1], 102)
+
+		mock.ExpectCommit().WillReturnError(boom)
+
+		ids, err := dao.ImportAds(ctx, adsdao.ImportAdsRequest{
+			OwnerID: ownerID,
+			Ads:     ads,
+		})
+
+		require.ErrorIs(t, err, boom)
+		assert.Nil(t, ids)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("accepts empty import without idempotency key", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		mock.ExpectBegin()
+		mock.ExpectCommit()
+
+		ids, err := dao.ImportAds(ctx, adsdao.ImportAdsRequest{
+			OwnerID: ownerID,
+		})
+
+		require.NoError(t, err)
+		assert.Empty(t, ids)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rejects import inside existing transaction", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		mock.ExpectBegin()
+		mock.ExpectRollback()
+
+		tx, err := dao.Begin(ctx)
+		require.NoError(t, err)
+
+		_, err = tx.(*DAO).ImportAds(ctx, adsdao.ImportAdsRequest{
+			OwnerID: ownerID,
+			Ads:     ads,
+		})
+
+		require.Error(t, err)
+		require.NoError(t, tx.Rollback())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
