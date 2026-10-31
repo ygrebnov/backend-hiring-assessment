@@ -12,6 +12,8 @@ type Store interface {
 	CreateAd(ctx context.Context, req CreateAdRequest) (domain.AdID, error)
 	// GetAdByID returns a single ad, or ErrNotFound.
 	GetAdByID(ctx context.Context, id domain.AdID) (domain.Ad, error)
+	// DeleteAdByID deletes a single ad, or returns ErrNotFound.
+	DeleteAdByID(ctx context.Context, id domain.AdID, userID domain.UserID) error
 	// SearchAds returns all ads matching the filters.
 	SearchAds(ctx context.Context, req SearchAdsRequest) ([]domain.Ad, error)
 }
@@ -53,6 +55,8 @@ const (
 	ErrNotFound sentinelError = "ad not found"
 	// ErrUnknownOwner is returned when an ad references a user that does not exist.
 	ErrUnknownOwner sentinelError = "unknown owner"
+	// ErrForbidden is returned when a user attempts to modify an ad they do not own.
+	ErrForbidden sentinelError = "forbidden"
 )
 
 type sentinelError string

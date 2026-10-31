@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	adsdao "github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/dao"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/domain"
 )
@@ -175,6 +176,104 @@ func TestCreateAd(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorIs(t, err, boom)
 		assert.NotErrorIs(t, err, adsdao.ErrUnknownOwner)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestDeleteAdByID(t *testing.T) {
+	ctx := context.Background()
+	userID := domain.UserID("user-1")
+
+	t.Run("returns nil on success", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		mock.ExpectExec("DELETE FROM ads WHERE id").
+			WithArgs(int64(42), string(userID)).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+
+		err := dao.DeleteAdByID(ctx, 42, userID)
+
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("returns ErrNotFound when ad does not exist", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		mock.ExpectExec("DELETE FROM ads WHERE id").
+			WithArgs(int64(99), string(userID)).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+
+		mock.ExpectQuery("SELECT 1 FROM ads WHERE id").
+			WithArgs(int64(99)).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}))
+
+		err := dao.DeleteAdByID(ctx, 99, userID)
+
+		require.ErrorIs(t, err, adsdao.ErrNotFound)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("returns ErrForbidden when ad belongs to another user", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		mock.ExpectExec("DELETE FROM ads WHERE id").
+			WithArgs(int64(42), string(userID)).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+
+		mock.ExpectQuery("SELECT 1 FROM ads WHERE id").
+			WithArgs(int64(42)).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(1))
+
+		err := dao.DeleteAdByID(ctx, 42, userID)
+
+		require.ErrorIs(t, err, adsdao.ErrForbidden)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("returns error on delete failure", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+		boom := errors.New("connection reset")
+
+		mock.ExpectExec("DELETE FROM ads WHERE id").
+			WithArgs(int64(1), string(userID)).
+			WillReturnError(boom)
+
+		err := dao.DeleteAdByID(ctx, 1, userID)
+
+		require.ErrorIs(t, err, boom)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("returns error when rows affected is unavailable", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+		boom := errors.New("rows affected unavailable")
+
+		mock.ExpectExec("DELETE FROM ads WHERE id").
+			WithArgs(int64(42), string(userID)).
+			WillReturnResult(sqlmock.NewErrorResult(boom))
+
+		err := dao.DeleteAdByID(ctx, 42, userID)
+
+		require.ErrorIs(t, err, boom)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("returns error when existence check fails", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+		boom := errors.New("database unavailable")
+
+		mock.ExpectExec("DELETE FROM ads WHERE id").
+			WithArgs(int64(42), string(userID)).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+
+		mock.ExpectQuery("SELECT 1 FROM ads WHERE id").
+			WithArgs(int64(42)).
+			WillReturnError(boom)
+
+		err := dao.DeleteAdByID(ctx, 42, userID)
+
+		require.ErrorIs(t, err, boom)
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }

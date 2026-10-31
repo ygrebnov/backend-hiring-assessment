@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
+
 	adsdao "github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/dao"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/domain"
 )
@@ -176,6 +177,39 @@ func (d *DAO) CreateAd(ctx context.Context, req adsdao.CreateAdRequest) (domain.
 	}
 
 	return id, nil
+}
+
+// DeleteAdByID deletes an ad owned by userID.
+// It returns ErrNotFound if the ad does not exist,
+// or ErrForbidden if the ad belongs to another user.
+func (d *DAO) DeleteAdByID(ctx context.Context, id domain.AdID, userID domain.UserID) error {
+	const queryDelete = `DELETE FROM ads WHERE id = $1 AND user_id = $2::uuid`
+
+	result, err := d.runner().ExecContext(ctx, queryDelete, int64(id), string(userID))
+	if err != nil {
+		return fmt.Errorf("unable to delete ad: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("unable to determine rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		const queryExists = `SELECT 1 FROM ads WHERE id = $1`
+		var exists int
+		if errExists := d.runner().
+			QueryRowContext(ctx, queryExists, int64(id)).
+			Scan(&exists); errExists != nil {
+			if errors.Is(errExists, sql.ErrNoRows) {
+				return adsdao.ErrNotFound
+			}
+			return fmt.Errorf("unable to check ad existence: %w", errExists)
+		}
+
+		return adsdao.ErrForbidden
+	}
+
+	return nil
 }
 
 func scanAd(row *sql.Row) (domain.Ad, error) {
