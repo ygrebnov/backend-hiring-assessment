@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	adsdao "github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/dao"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/dao/mock"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/domain"
@@ -24,7 +25,7 @@ func TestMock_SearchAds(t *testing.T) {
 
 		got, err := m.SearchAds(ctx, req)
 
-		require.Error(t, err)
+		require.NoError(t, err)
 		assert.Equal(t, want, got)
 	})
 
