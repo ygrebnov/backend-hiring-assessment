@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/domain"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/usecase"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/common/middleware"
@@ -42,7 +43,7 @@ func postJSON(t *testing.T, url string, body any, authHeader string) *http.Respo
 func TestHandlerCreateAd(t *testing.T) {
 	validBody := createAdBody{
 		Title:      "mountain bike",
-		PriceCents: 15000,
+		PriceCents: ptr(int64(15000)),
 		PhotoURL:   "https://example.com/bike.jpg",
 	}
 
@@ -124,4 +125,125 @@ func TestHandlerCreateAd(t *testing.T) {
 
 		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	})
+
+	t.Run("accepts new price format", func(t *testing.T) {
+		var received usecase.CreateAdRequest
+
+		srv := newCreateAdServer(func(_ context.Context, req usecase.CreateAdRequest) (domain.AdID, error) {
+			received = req
+			return domain.AdID(1), nil
+		})
+		defer srv.Close()
+
+		resp := postJSON(t, srv.URL+"/ads", map[string]any{
+			"title":     "mountain bike",
+			"price":     150.50,
+			"photo_url": "https://example.com/bike.jpg",
+		}, "user-1")
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusCreated, resp.StatusCode)
+		assert.Equal(t, int64(15050), received.PriceCents)
+	})
+
+	t.Run("returns 400 when both price formats are provided", func(t *testing.T) {
+		srv := newCreateAdServer(func(_ context.Context, _ usecase.CreateAdRequest) (domain.AdID, error) {
+			t.Fatal("usecase should not be called")
+			return 0, nil
+		})
+		defer srv.Close()
+
+		resp := postJSON(t, srv.URL+"/ads", map[string]any{
+			"title":       "mountain bike",
+			"price":       150.50,
+			"price_cents": 15050,
+			"photo_url":   "https://example.com/bike.jpg",
+		}, "user-1")
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+}
+
+func TestCreateAdBodyPriceCents(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    createAdBody
+		want    int64
+		wantErr bool
+	}{
+		{
+			name: "new price format",
+			body: createAdBody{
+				Price: ptr(json.Number("150.50")),
+			},
+			want: 15050,
+		},
+		{
+			name: "legacy price format",
+			body: createAdBody{
+				PriceCents: ptr(int64(15050)),
+			},
+			want: 15050,
+		},
+		{
+			name: "zero price",
+			body: createAdBody{
+				Price: ptr(json.Number("0")),
+			},
+			want: 0,
+		},
+		{
+			name: "zero price in legacy format",
+			body: createAdBody{
+				PriceCents: ptr(int64(0)),
+			},
+			want: 0,
+		},
+		{
+			name:    "missing price",
+			body:    createAdBody{},
+			wantErr: true,
+		},
+		{
+			name: "both formats provided",
+			body: createAdBody{
+				Price:      ptr(json.Number("150.50")),
+				PriceCents: ptr(int64(15050)),
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative legacy price",
+			body: createAdBody{
+				PriceCents: ptr(int64(-100)),
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid new price",
+			body: createAdBody{
+				Price: ptr(json.Number("150.555")),
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.body.priceCents()
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func ptr[T any](v T) *T {
+	return &v
 }

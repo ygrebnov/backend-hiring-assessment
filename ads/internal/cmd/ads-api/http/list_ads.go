@@ -13,7 +13,18 @@ import (
 type listAdsItem struct {
 	ID         int64     `json:"id"`
 	Title      string    `json:"title"`
-	PriceCents int64     `json:"price_cents"`
+
+	// PriceCents is the price of the ad in cents.
+	// PriceCents is being deprecated in favor of the new Price field,
+	// which is a decimal representation of the price.
+	// During the transition period, both fields will be present in the response.
+	PriceCents int64 `json:"price_cents"`
+
+	// Price is the price of the ad in decimal format.
+	// Price is a new field that replaces PriceCents.
+	// During the transition period, both fields will be present in the response.
+	Price float64 `json:"price"`
+
 	PhotoURL   string    `json:"photo_url"`
 	UserID     string    `json:"user_id"`
 	CreatedAt  time.Time `json:"created_at"`
@@ -28,6 +39,7 @@ func adToListAdsItem(a domain.Ad) listAdsItem {
 		ID:         int64(a.ID),
 		Title:      a.Title,
 		PriceCents: a.Price,
+		Price:      float64(a.Price) / 100,
 		PhotoURL:   a.PhotoURL,
 		UserID:     a.UserID.String(),
 		CreatedAt:  a.CreatedAt.UTC(),
