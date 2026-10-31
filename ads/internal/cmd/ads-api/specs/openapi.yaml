@@ -142,10 +142,57 @@ paths:
   /ads/import:
     post:
       summary: Import multiple ads
+      description: |
+        Atomically imports multiple ads belonging to the authenticated user.
+
+        All ads are inserted in a single database transaction. If any
+        insertion fails, the entire import is rolled back and no ads
+        from that request are persisted.
+
+        Clients may provide an optional `Idempotency-Key` header to
+        safely retry an import after a timeout or network failure.
+
+        Idempotency keys are scoped to the authenticated user:
+        - A new key creates the ads and stores the generated IDs.
+        - Repeating the same key with the same payload returns the
+          original IDs without creating additional ads.
+        - Repeating the same key with a different payload returns
+          HTTP 409 Conflict.
+        - Different users may use the same key independently.
+
+        Payload comparison uses normalized ad data, so equivalent
+        `price` and `price_cents` representations are treated identically.
+        The order of ads in the array is significant.
+
+        Without an idempotency key, imports are still atomic, but
+        retries may create duplicate ads.
+
+        An empty ads array is accepted and returns an empty IDs array.
+
+        Bulk imports are exempt from the individual ad publication quota.
+
       operationId: importAds
       tags: [ ads ]
+
       security:
         - userID: [ ]
+
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: |
+            Optional client-generated identifier for an import operation.
+
+            Reusing this key with an identical payload returns the
+            original result. Reusing it with a different payload
+            returns HTTP 409 Conflict.
+
+            Keys are scoped to the authenticated user.
+          schema:
+            type: string
+          example: "import-2026-001"
+
       requestBody:
         required: true
         content:
@@ -156,11 +203,30 @@ paths:
               properties:
                 ads:
                   type: array
+                  description: |
+                    Ads to import. All ads are assigned to the
+                    authenticated user.
                   items:
                     $ref: "#/components/schemas/CreateAdBody"
+
+            example:
+              ads:
+                - title: mountain bike
+                  price: 150.50
+                  photo_url: https://example.com/bike.jpg
+                - title: scooter
+                  price: 80.00
+                  photo_url: https://example.com/scooter.jpg
+
       responses:
         "201":
-          description: Ads imported. The body contains their generated identifiers.
+          description: |
+            Import completed successfully.
+
+            Returns the generated ad IDs in the same order as the
+            request. When replaying a successful import with the
+            same idempotency key and payload, the original IDs
+            are returned without creating new ads.
           content:
             application/json:
               schema:
@@ -172,12 +238,32 @@ paths:
                     items:
                       type: integer
                       format: int64
+              example:
+                ids: [ 101, 102 ]
+
         "400":
-          description: Invalid request body or invalid price in an imported ad.
+          description: |
+            Invalid request body, unknown field, or invalid price
+            in one or more imported ads. No ads are created.
+
         "401":
           description: Missing Authorization header.
+
+        "409":
+          description: |
+            Idempotency key conflict.
+
+            The specified Idempotency-Key has already been used
+            by this user for a different import payload.
+            No additional ads are created.
+
         "500":
-          description: Unexpected server error.
+          description: |
+            Unexpected server error.
+
+            The import transaction is rolled back if it has not
+            committed. If the client does not receive a response,
+            it can safely retry using the same idempotency key.
 
 components:
   securitySchemes:

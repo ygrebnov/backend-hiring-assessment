@@ -174,6 +174,79 @@ func TestMock_Begin(t *testing.T) {
 	})
 }
 
+func TestMock_ImportAds(t *testing.T) {
+	t.Run("returns configured ad IDs", func(t *testing.T) {
+		m := mock.New(t)
+		req := adsdao.ImportAdsRequest{
+			OwnerID: "user-1",
+			Ads: []adsdao.CreateAdRequest{
+				{
+					Title:      "bike",
+					PriceCents: 5000,
+					OwnerID:    "user-1",
+				},
+				{
+					Title:      "scooter",
+					PriceCents: 12000,
+					OwnerID:    "user-1",
+				},
+			},
+			IdempotencyKey: "import-123",
+			RequestHash:    "hash-abc",
+		}
+		want := []domain.AdID{101, 102}
+
+		m.On("ImportAds", ctx, req).Return(want, nil)
+
+		got, err := m.ImportAds(ctx, req)
+
+		require.NoError(t, err)
+		assert.Equal(t, want, got)
+	})
+
+	t.Run("returns configured error", func(t *testing.T) {
+		m := mock.New(t)
+		req := adsdao.ImportAdsRequest{
+			OwnerID:        "user-1",
+			Ads:            []adsdao.CreateAdRequest{{Title: "bike", PriceCents: 5000}},
+			IdempotencyKey: "import-123",
+		}
+		boom := errors.New("db down")
+
+		m.On("ImportAds", ctx, req).Return(nil, boom)
+
+		got, err := m.ImportAds(ctx, req)
+
+		assert.ErrorIs(t, err, boom)
+		assert.Nil(t, got)
+	})
+
+	t.Run("returns idempotency conflict", func(t *testing.T) {
+		m := mock.New(t)
+
+		req := adsdao.ImportAdsRequest{
+			OwnerID: "user-1",
+			Ads: []adsdao.CreateAdRequest{
+				{
+					Title:      "bike",
+					PriceCents: 5000,
+					OwnerID:    "user-1",
+				},
+			},
+			IdempotencyKey: "import-123",
+			RequestHash:    "hash-new",
+		}
+
+		m.On("ImportAds", ctx, req).
+			Return(nil, adsdao.ErrIdempotencyConflict)
+
+		got, err := m.ImportAds(ctx, req)
+
+		require.ErrorIs(t, err, adsdao.ErrIdempotencyConflict)
+		assert.Nil(t, got)
+	})
+}
+
 func TestMock_Commit(t *testing.T) {
 	t.Run("returns nil on success", func(t *testing.T) {
 		m := mock.New(t)

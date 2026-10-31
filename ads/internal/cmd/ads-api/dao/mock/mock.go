@@ -71,6 +71,15 @@ func (m *Mock) Begin(ctx context.Context) (adsdao.Tx, error) {
 	return m, nil
 }
 
+// ImportAds returns the ad IDs and the error set on the mock.
+func (m *Mock) ImportAds(ctx context.Context, req adsdao.ImportAdsRequest) ([]domain.AdID, error) {
+	args := m.Called(ctx, req)
+
+	adIDs, _ := args.Get(0).([]domain.AdID)
+
+	return adIDs, args.Error(1)
+}
+
 // Commit returns the error set on the mock.
 func (m *Mock) Commit() error {
 	return m.Called().Error(0)

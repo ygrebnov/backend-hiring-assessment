@@ -212,6 +212,121 @@ func (d *DAO) DeleteAdByID(ctx context.Context, id domain.AdID, userID domain.Us
 	return nil
 }
 
+// ImportAds atomically inserts all ads and returns their generated IDs.
+// If an idempotency key is provided, successful imports can be retried
+// without creating duplicate ads.
+func (d *DAO) ImportAds(ctx context.Context, req adsdao.ImportAdsRequest) ([]domain.AdID, error) {
+	if d.tx != nil {
+		return nil, errors.New("unable to import ads inside an existing transaction")
+	}
+
+	tx, err := d.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("unable to begin import: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	store := tx.(*DAO)
+
+	if req.IdempotencyKey != "" {
+		// Claim the idempotency key before inserting any ads.
+		//
+		// PostgreSQL's unique constraint serializes concurrent attempts
+		// to claim the same (user_id, idempotency_key) pair.
+		//
+		// A conflicting transaction waits until the first transaction
+		// commits or rolls back.
+		const claimQuery = `
+			INSERT INTO ad_imports (
+				user_id, idempotency_key, request_hash, ad_ids
+			)
+			VALUES ($1::uuid, $2, $3, '{}'::bigint[])
+			ON CONFLICT (user_id, idempotency_key) DO NOTHING
+			RETURNING idempotency_key`
+
+		var claimedKey string
+		err := store.tx.QueryRowContext(
+			ctx,
+			claimQuery,
+			string(req.OwnerID),
+			req.IdempotencyKey,
+			req.RequestHash,
+		).Scan(&claimedKey)
+
+		switch {
+		case err == nil:
+			// This transaction owns the key and can proceed.
+
+		case errors.Is(err, sql.ErrNoRows):
+			// The key already exists. Retrieve the previous result.
+			const lookupQuery = `
+				SELECT request_hash, ad_ids
+				FROM ad_imports
+				WHERE user_id = $1::uuid
+				  AND idempotency_key = $2`
+
+			var storedHash string
+			var storedIDs adIDs
+
+			err = store.tx.QueryRowContext(
+				ctx,
+				lookupQuery,
+				string(req.OwnerID),
+				req.IdempotencyKey,
+			).Scan(&storedHash, &storedIDs)
+
+			if err != nil {
+				return nil, fmt.Errorf("unable to retrieve previous import: %w", err)
+			}
+
+			if storedHash != req.RequestHash {
+				return nil, adsdao.ErrIdempotencyConflict
+			}
+
+			return storedIDs, nil
+
+		default:
+			return nil, fmt.Errorf("unable to claim idempotency key: %w", err)
+		}
+	}
+
+	ids := make([]domain.AdID, 0, len(req.Ads))
+
+	for _, ad := range req.Ads {
+		id, err := store.CreateAd(ctx, ad)
+		if err != nil {
+			return nil, fmt.Errorf("unable to import ad: %w", err)
+		}
+
+		ids = append(ids, id)
+	}
+
+	if req.IdempotencyKey != "" {
+		const updateQuery = `
+			UPDATE ad_imports
+			SET ad_ids = $3::bigint[]
+			WHERE user_id = $1::uuid
+	  		AND idempotency_key = $2`
+
+		_, err = store.tx.ExecContext(
+			ctx,
+			updateQuery,
+			string(req.OwnerID),
+			req.IdempotencyKey,
+			adIDs(ids),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("unable to store import result: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("unable to commit import: %w", err)
+	}
+
+	return ids, nil
+}
+
 func scanAd(row *sql.Row) (domain.Ad, error) {
 	var ad domain.Ad
 	if err := row.Scan(&ad.ID, &ad.Title, &ad.Price, &ad.PhotoURL, &ad.UserID, &ad.CreatedAt); err != nil {

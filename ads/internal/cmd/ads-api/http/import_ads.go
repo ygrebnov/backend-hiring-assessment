@@ -2,8 +2,10 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
+	adsdao "github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/dao"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/usecase"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/common/middleware"
 )
@@ -16,7 +18,7 @@ type importAdsResponse struct {
 	IDs []int64 `json:"ids"`
 }
 
-func handlerImportAds(createAd usecase.CreateAdFunc) http.HandlerFunc {
+func handlerImportAds(importAds usecase.ImportAdsFunc) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
 		var body importAdsBody
 		if err := decodeBody(r, &body); err != nil {
@@ -24,32 +26,43 @@ func handlerImportAds(createAd usecase.CreateAdFunc) http.HandlerFunc {
 			return
 		}
 
-		priceCents := make([]int64, len(body.Ads))
+		ownerID := middleware.UserIDFromRequest(r)
+
+		ads := make([]usecase.CreateAdRequest, len(body.Ads))
+
 		for i, item := range body.Ads {
-			cents, err := item.priceCents()
+			priceCents, err := item.priceCents()
 			if err != nil {
 				rw.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			priceCents[i] = cents
-		}
 
-		ownerID := middleware.UserIDFromRequest(r)
-		ids := make([]int64, 0, len(body.Ads))
-
-		for i, item := range body.Ads {
-			adID, err := createAd(r.Context(), usecase.CreateAdRequest{
+			ads[i] = usecase.CreateAdRequest{
 				Title:      item.Title,
-				PriceCents: priceCents[i],
+				PriceCents: priceCents,
 				PhotoURL:   item.PhotoURL,
 				OwnerID:    ownerID,
-			})
-			if err != nil {
-				rw.WriteHeader(http.StatusInternalServerError)
+			}
+		}
+
+		adIDs, err := importAds(r.Context(), usecase.ImportAdsRequest{
+			Ads:            ads,
+			OwnerID:        ownerID,
+			IdempotencyKey: r.Header.Get("Idempotency-Key"),
+		})
+		if err != nil {
+			if errors.Is(err, adsdao.ErrIdempotencyConflict) {
+				rw.WriteHeader(http.StatusConflict)
 				return
 			}
 
-			ids = append(ids, int64(adID))
+			rw.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		ids := make([]int64, len(adIDs))
+		for i, id := range adIDs {
+			ids[i] = int64(id)
 		}
 
 		rw.Header().Set("Content-Type", "application/json")
