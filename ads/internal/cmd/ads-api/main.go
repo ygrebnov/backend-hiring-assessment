@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/client/identity"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/dao/postgres"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/http"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/usecase"
@@ -32,9 +33,11 @@ func run() error {
 		}
 	}()
 
+	identityClient := identity.New(cfg.IdentityURL, cfg.IdentityTimeout)
+
 	router := http.NewRouter(http.Usecases{
 		CreateAd: usecase.NewCreateAdFunc(adDAO),
-		GetAd:    usecase.NewGetAdByIDFunc(adDAO),
+		GetAd:    usecase.NewGetAdByIDFunc(adDAO, identityClient),
 		ListAds:  usecase.NewListAdsFunc(adDAO),
 		DeleteAd: usecase.NewDeleteAdByIDFunc(adDAO),
 	})
