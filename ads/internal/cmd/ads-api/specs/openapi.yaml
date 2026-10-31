@@ -2,7 +2,7 @@ openapi: "3.0.3"
 
 info:
   title: Ads API
-  description: Classified ads — list, read, create, and delete ads.
+  description: Classified ads — list, read, create, delete, and bulk-import ads.
   version: "1.0.0"
 
 servers:
@@ -83,7 +83,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/CreateAdResponse"
         "400":
-          description: Malformed or unknown request body field.
+          description: Malformed or unknown request body field, including missing, conflicting, or invalid price fields.
         "401":
           description: Missing Authorization header.
         "500":
@@ -139,6 +139,46 @@ paths:
         "500":
           description: Unexpected server error.
 
+  /ads/import:
+    post:
+      summary: Import multiple ads
+      operationId: importAds
+      tags: [ ads ]
+      security:
+        - userID: [ ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ ads ]
+              properties:
+                ads:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/CreateAdBody"
+      responses:
+        "201":
+          description: Ads imported. The body contains their generated identifiers.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ ids ]
+                properties:
+                  ids:
+                    type: array
+                    items:
+                      type: integer
+                      format: int64
+        "400":
+          description: Invalid request body or invalid price in an imported ad.
+        "401":
+          description: Missing Authorization header.
+        "500":
+          description: Unexpected server error.
+
 components:
   securitySchemes:
     userID:
@@ -150,7 +190,7 @@ components:
   schemas:
     Ad:
       type: object
-      required: [id, title, price_cents, photo_url, user_id, created_at]
+      required: [id, title, price, price_cents, photo_url, user_id, created_at]
       properties:
         id:
           type: integer
@@ -159,11 +199,18 @@ components:
         title:
           type: string
           example: mountain bike
+        price:
+          type: number
+          format: double
+          minimum: 0
+          description: Price in euros with at most two decimal places.
+          example: 150.50
         price_cents:
           type: integer
           format: int64
-          description: Price in euro cents.
-          example: 15000
+          deprecated: true
+          description: Deprecated. Price in euro cents. Use price instead.
+          example: 15050
         photo_url:
           type: string
           example: https://example.com/bike.jpg
@@ -197,19 +244,30 @@ components:
 
     CreateAdBody:
       type: object
-      required: [title, price_cents, photo_url]
+      required: [ title, photo_url ]
       properties:
         title:
           type: string
           example: mountain bike
+        price:
+          type: number
+          format: double
+          minimum: 0
+          description: Price in euros, with at most two decimal places. Exponent notation is not supported.
+          example: 150.50
         price_cents:
           type: integer
           format: int64
-          description: Price in euro cents.
-          example: 15000
+          minimum: 0
+          deprecated: true
+          description: Deprecated. Price in euro cents. Use price instead.
+          example: 15050
         photo_url:
           type: string
           example: https://example.com/bike.jpg
+      oneOf:
+        - required: [ price ]
+        - required: [ price_cents ]
 
     CreateAdResponse:
       type: object

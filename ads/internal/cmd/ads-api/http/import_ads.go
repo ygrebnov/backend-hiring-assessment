@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/domain"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/usecase"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/common/middleware"
 )
@@ -25,13 +24,23 @@ func handlerImportAds(createAd usecase.CreateAdFunc) http.HandlerFunc {
 			return
 		}
 
-		ownerID := domain.UserID(middleware.UserIDFromRequest(r))
+		priceCents := make([]int64, len(body.Ads))
+		for i, item := range body.Ads {
+			cents, err := item.priceCents()
+			if err != nil {
+				rw.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			priceCents[i] = cents
+		}
+
+		ownerID := middleware.UserIDFromRequest(r)
 		ids := make([]int64, 0, len(body.Ads))
 
-		for _, item := range body.Ads {
+		for i, item := range body.Ads {
 			adID, err := createAd(r.Context(), usecase.CreateAdRequest{
 				Title:      item.Title,
-				PriceCents: item.PriceCents,
+				PriceCents: priceCents[i],
 				PhotoURL:   item.PhotoURL,
 				OwnerID:    ownerID,
 			})

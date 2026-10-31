@@ -31,7 +31,7 @@ func TestHandlerGetAd(t *testing.T) {
 		ad := domain.Ad{
 			ID:        42,
 			Title:     "mountain bike",
-			Price:     15000,
+			Price:     15050,
 			PhotoURL:  "https://example.com/bike.jpg",
 			UserID:    "user-1",
 			UserName:  "alice",
@@ -53,7 +53,8 @@ func TestHandlerGetAd(t *testing.T) {
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
 		assert.Equal(t, int64(42), got.ID)
 		assert.Equal(t, "mountain bike", got.Title)
-		assert.Equal(t, int64(15000), got.PriceCents)
+		assert.Equal(t, int64(15050), got.PriceCents)
+		assert.Equal(t, 150.50, got.Price)
 		assert.Equal(t, "https://example.com/bike.jpg", got.PhotoURL)
 		assert.Equal(t, "user-1", got.UserID)
 		assert.Equal(t, "alice", got.UserName)
@@ -114,5 +115,27 @@ func TestHandlerGetAd(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, domain.AdID(7), receivedID)
+	})
+
+	t.Run("includes both price fields in JSON response", func(t *testing.T) {
+		srv := newGetAdServer(func(_ context.Context, _ domain.AdID) (domain.Ad, error) {
+			return domain.Ad{
+				ID:    42,
+				Price: 0,
+			}, nil
+		})
+		defer srv.Close()
+
+		resp, err := http.Get(srv.URL + "/ads/42")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		var body map[string]json.RawMessage
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+
+		assert.Contains(t, body, "price")
+		assert.Contains(t, body, "price_cents")
 	})
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/domain"
 
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/usecase"
@@ -34,9 +35,21 @@ func TestHandlerImportAds(t *testing.T) {
 		defer srv.Close()
 
 		body := importAdsBody{Ads: []createAdBody{
-			{Title: "bike", PriceCents: 5000, PhotoURL: "https://example.com/bike.jpg"},
-			{Title: "scooter", PriceCents: 8000, PhotoURL: "https://example.com/scooter.jpg"},
-			{Title: "car", PriceCents: 200000, PhotoURL: "https://example.com/car.jpg"},
+			{
+				Title:      "bike",
+				PriceCents: ptr(int64(5000)),
+				PhotoURL:   "https://example.com/bike.jpg",
+			},
+			{
+				Title:      "scooter",
+				PriceCents: ptr(int64(8000)),
+				PhotoURL:   "https://example.com/scooter.jpg",
+			},
+			{
+				Title:      "car",
+				PriceCents: ptr(int64(200000)),
+				PhotoURL:   "https://example.com/car.jpg",
+			},
 		}}
 		resp := postJSON(t, srv.URL+"/ads/import", body, "user-1")
 		defer resp.Body.Close()
@@ -57,8 +70,16 @@ func TestHandlerImportAds(t *testing.T) {
 		defer srv.Close()
 
 		body := importAdsBody{Ads: []createAdBody{
-			{Title: "bike", PriceCents: 5000, PhotoURL: "https://example.com/bike.jpg"},
-			{Title: "scooter", PriceCents: 8000, PhotoURL: "https://example.com/scooter.jpg"},
+			{
+				Title:      "bike",
+				PriceCents: ptr(int64(5000)),
+				PhotoURL:   "https://example.com/bike.jpg",
+			},
+			{
+				Title:      "scooter",
+				PriceCents: ptr(int64(8000)),
+				PhotoURL:   "https://example.com/scooter.jpg",
+			},
 		}}
 		resp := postJSON(t, srv.URL+"/ads/import", body, "user-42")
 		defer resp.Body.Close()
@@ -129,14 +150,124 @@ func TestHandlerImportAds(t *testing.T) {
 		defer srv.Close()
 
 		body := importAdsBody{Ads: []createAdBody{
-			{Title: "bike", PriceCents: 5000, PhotoURL: "https://example.com/bike.jpg"},
-			{Title: "scooter", PriceCents: 8000, PhotoURL: "https://example.com/scooter.jpg"},
-			{Title: "car", PriceCents: 200000, PhotoURL: "https://example.com/car.jpg"},
+			{
+				Title:      "bike",
+				PriceCents: ptr(int64(5000)),
+				PhotoURL:   "https://example.com/bike.jpg",
+			},
+			{
+				Title:      "scooter",
+				PriceCents: ptr(int64(8000)),
+				PhotoURL:   "https://example.com/scooter.jpg",
+			},
+			{
+				Title:      "car",
+				PriceCents: ptr(int64(200000)),
+				PhotoURL:   "https://example.com/car.jpg",
+			},
 		}}
 		resp := postJSON(t, srv.URL+"/ads/import", body, "user-1")
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 		assert.Equal(t, 2, call)
+	})
+
+	t.Run("accepts new price format", func(t *testing.T) {
+		var received []usecase.CreateAdRequest
+
+		srv := newImportAdsServer(func(_ context.Context, req usecase.CreateAdRequest) (domain.AdID, error) {
+			received = append(received, req)
+			return domain.AdID(len(received)), nil
+		})
+		defer srv.Close()
+
+		body := importAdsBody{Ads: []createAdBody{
+			{
+				Title:    "bike",
+				Price:    ptr(json.Number("150.50")),
+				PhotoURL: "https://example.com/bike.jpg",
+			},
+			{
+				Title:    "scooter",
+				Price:    ptr(json.Number("80")),
+				PhotoURL: "https://example.com/scooter.jpg",
+			},
+		}}
+
+		resp := postJSON(t, srv.URL+"/ads/import", body, "user-1")
+		defer resp.Body.Close()
+
+		require.Equal(t, http.StatusCreated, resp.StatusCode)
+		require.Len(t, received, 2)
+
+		assert.Equal(t, int64(15050), received[0].PriceCents)
+		assert.Equal(t, int64(8000), received[1].PriceCents)
+	})
+
+	t.Run("accepts mixed price formats", func(t *testing.T) {
+		var received []usecase.CreateAdRequest
+
+		srv := newImportAdsServer(func(_ context.Context, req usecase.CreateAdRequest) (domain.AdID, error) {
+			received = append(received, req)
+			return domain.AdID(len(received)), nil
+		})
+		defer srv.Close()
+
+		body := importAdsBody{Ads: []createAdBody{
+			{
+				Title:    "bike",
+				Price:    ptr(json.Number("150.50")),
+				PhotoURL: "https://example.com/bike.jpg",
+			},
+			{
+				Title:      "scooter",
+				PriceCents: ptr(int64(8000)),
+				PhotoURL:   "https://example.com/scooter.jpg",
+			},
+		}}
+
+		resp := postJSON(t, srv.URL+"/ads/import", body, "user-1")
+		defer resp.Body.Close()
+
+		require.Equal(t, http.StatusCreated, resp.StatusCode)
+		require.Len(t, received, 2)
+
+		assert.Equal(t, int64(15050), received[0].PriceCents)
+		assert.Equal(t, int64(8000), received[1].PriceCents)
+	})
+
+	t.Run("returns 400 without creating ads when a price is invalid", func(t *testing.T) {
+		calls := 0
+
+		srv := newImportAdsServer(func(_ context.Context, _ usecase.CreateAdRequest) (domain.AdID, error) {
+			calls++
+			return domain.AdID(calls), nil
+		})
+		defer srv.Close()
+
+		body := importAdsBody{Ads: []createAdBody{
+			{
+				Title:    "bike",
+				Price:    ptr(json.Number("150.50")),
+				PhotoURL: "https://example.com/bike.jpg",
+			},
+			{
+				Title:    "scooter",
+				Price:    ptr(json.Number("80.555")),
+				PhotoURL: "https://example.com/scooter.jpg",
+			},
+			{
+				Title:      "car",
+				PriceCents: ptr(int64(200000)),
+				PhotoURL:   "https://example.com/car.jpg",
+			},
+		}}
+
+		resp := postJSON(t, srv.URL+"/ads/import", body, "user-1")
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		assert.Zero(t, calls, "no ads should be created when batch validation fails")
 	})
 }
