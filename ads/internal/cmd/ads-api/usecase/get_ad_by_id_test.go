@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+
 	adsdao "github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/dao"
 	mockdao "github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/dao/mock"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/domain"
@@ -18,11 +19,12 @@ func TestGetAdByID(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("nominal", func(t *testing.T) {
+		adID := domain.AdID(42)
 		m := mockdao.New(t)
-		want := domain.Ad{ID: 42, Title: "bike", Price: 5000, UserID: "user-1"}
-		m.On("GetAdByID", ctx, mock.Anything).Return(want, nil)
+		want := domain.Ad{ID: adID, Title: "bike", Price: 5000, UserID: "user-1"}
+		m.On("GetAdByID", ctx, adID).Return(want, nil)
 
-		got, err := usecase.NewGetAdByIDFunc(m)(ctx, 42)
+		got, err := usecase.NewGetAdByIDFunc(m)(ctx, adID)
 
 		require.NoError(t, err)
 		assert.Equal(t, want, got)
