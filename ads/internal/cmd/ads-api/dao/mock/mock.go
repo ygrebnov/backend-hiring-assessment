@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/mock"
+
 	adsdao "github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/dao"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/domain"
 )
@@ -50,6 +51,13 @@ func (m *Mock) CreateAd(ctx context.Context, req adsdao.CreateAdRequest) (domain
 	adID, _ := args.Get(0).(domain.AdID)
 
 	return adID, args.Error(1)
+}
+
+// DeleteAdByID returns the error set on the mock.
+func (m *Mock) DeleteAdByID(ctx context.Context, id domain.AdID, userID domain.UserID) error {
+	args := m.Called(ctx, id, userID)
+
+	return args.Error(0)
 }
 
 // Begin returns the mock itself as the transaction, so expectations stay set on a single object, and the error set on the mock.
