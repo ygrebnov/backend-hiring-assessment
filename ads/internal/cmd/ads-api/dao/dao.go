@@ -2,6 +2,7 @@ package dao
 
 import (
 	"context"
+	"time"
 
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/domain"
 )
@@ -27,6 +28,10 @@ type DAO interface {
 	// ImportAds atomically inserts all ads and returns their generated IDs.
 	// If any insert fails, no ads are persisted.
 	ImportAds(ctx context.Context, req ImportAdsRequest) ([]domain.AdID, error)
+
+	// CreateAdWithQuota inserts an ad if the user has not exceeded their publication limit,
+	// and returns its generated identifier.
+	CreateAdWithQuota(ctx context.Context, req CreateAdWithQuotaRequest) (domain.AdID, error)
 }
 
 // Tx is a Store scoped to an opened transaction.
@@ -54,6 +59,15 @@ type CreateAdRequest struct {
 	OwnerID    domain.UserID
 }
 
+// CreateAdWithQuotaRequest carries the data needed to create an ad with a publication limit.
+type CreateAdWithQuotaRequest struct {
+	CreateAdRequest
+	Limit  int
+	Window time.Duration
+}
+
+// ImportAdsRequest carries the data needed to import multiple ads atomically and
+// (optionally) idempotently.
 type ImportAdsRequest struct {
 	OwnerID        domain.UserID
 	Ads            []CreateAdRequest
@@ -71,6 +85,9 @@ const (
 	// ErrIdempotencyConflict is returned when an idempotency key is reused
 	// with a different request payload.
 	ErrIdempotencyConflict sentinelError = "idempotency key conflict"
+	// ErrPublicationLimitExceeded is returned when a user attempts to create an ad
+	// but has already reached their publication limit within the configured time window.
+	ErrPublicationLimitExceeded sentinelError = "publication limit exceeded"
 )
 
 type sentinelError string

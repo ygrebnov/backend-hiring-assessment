@@ -667,3 +667,306 @@ func TestImportAds(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }
+
+func TestCreateAdWithQuota(t *testing.T) {
+	ctx := context.Background()
+
+	ownerID := domain.UserID("00000000-0000-0000-0000-000000000001")
+
+	req := adsdao.CreateAdWithQuotaRequest{
+		CreateAdRequest: adsdao.CreateAdRequest{
+			Title:      "mountain bike",
+			PriceCents: 15000,
+			PhotoURL:   "https://example.com/bike.jpg",
+			OwnerID:    ownerID,
+		},
+		Limit:  5,
+		Window: 24 * time.Hour,
+	}
+
+	expectLock := func(mock sqlmock.Sqlmock) {
+		mock.ExpectExec("SELECT pg_advisory_xact_lock").
+			WithArgs(string(ownerID)).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+
+	expectCount := func(mock sqlmock.Sqlmock, count int) {
+		mock.ExpectQuery("SELECT COUNT").
+			WithArgs(string(ownerID), req.Window.Seconds()).
+			WillReturnRows(
+				sqlmock.NewRows([]string{"count"}).AddRow(count),
+			)
+	}
+
+	expectInsert := func(mock sqlmock.Sqlmock, id int64) {
+		mock.ExpectQuery("INSERT INTO ads").
+			WithArgs(
+				req.Title,
+				req.PriceCents,
+				req.PhotoURL,
+				string(ownerID),
+			).
+			WillReturnRows(
+				sqlmock.NewRows([]string{"id"}).AddRow(id),
+			)
+	}
+
+	expectPublication := func(mock sqlmock.Sqlmock) {
+		mock.ExpectExec("INSERT INTO ad_publications").
+			WithArgs(string(ownerID)).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+
+	t.Run("creates ad when quota is available", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		mock.ExpectBegin()
+		expectLock(mock)
+		expectCount(mock, 3)
+		expectInsert(mock, 42)
+		expectPublication(mock)
+		mock.ExpectCommit()
+
+		id, err := dao.CreateAdWithQuota(ctx, req)
+
+		require.NoError(t, err)
+		assert.Equal(t, domain.AdID(42), id)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("allows the fifth publication", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		mock.ExpectBegin()
+		expectLock(mock)
+		expectCount(mock, 4)
+		expectInsert(mock, 42)
+		expectPublication(mock)
+		mock.ExpectCommit()
+
+		id, err := dao.CreateAdWithQuota(ctx, req)
+
+		require.NoError(t, err)
+		assert.Equal(t, domain.AdID(42), id)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rejects publication when quota is reached", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		mock.ExpectBegin()
+		expectLock(mock)
+		expectCount(mock, 5)
+		mock.ExpectRollback()
+
+		id, err := dao.CreateAdWithQuota(ctx, req)
+
+		require.ErrorIs(t, err, adsdao.ErrPublicationLimitExceeded)
+		assert.Zero(t, id)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rejects publication when quota is exceeded", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		mock.ExpectBegin()
+		expectLock(mock)
+		expectCount(mock, 7)
+		mock.ExpectRollback()
+
+		id, err := dao.CreateAdWithQuota(ctx, req)
+
+		require.ErrorIs(t, err, adsdao.ErrPublicationLimitExceeded)
+		assert.Zero(t, id)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("returns error when transaction cannot begin", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+		boom := errors.New("database unavailable")
+
+		mock.ExpectBegin().WillReturnError(boom)
+
+		id, err := dao.CreateAdWithQuota(ctx, req)
+
+		require.ErrorIs(t, err, boom)
+		assert.Zero(t, id)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rolls back when acquiring lock fails", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+		boom := errors.New("lock failed")
+
+		mock.ExpectBegin()
+
+		mock.ExpectExec("SELECT pg_advisory_xact_lock").
+			WithArgs(string(ownerID)).
+			WillReturnError(boom)
+
+		mock.ExpectRollback()
+
+		id, err := dao.CreateAdWithQuota(ctx, req)
+
+		require.ErrorIs(t, err, boom)
+		assert.Zero(t, id)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rolls back when counting publications fails", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+		boom := errors.New("count failed")
+
+		mock.ExpectBegin()
+		expectLock(mock)
+
+		mock.ExpectQuery("SELECT COUNT").
+			WithArgs(string(ownerID), req.Window.Seconds()).
+			WillReturnError(boom)
+
+		mock.ExpectRollback()
+
+		id, err := dao.CreateAdWithQuota(ctx, req)
+
+		require.ErrorIs(t, err, boom)
+		assert.Zero(t, id)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rolls back when creating ad fails", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+		boom := errors.New("insert failed")
+
+		mock.ExpectBegin()
+		expectLock(mock)
+		expectCount(mock, 2)
+
+		mock.ExpectQuery("INSERT INTO ads").
+			WithArgs(
+				req.Title,
+				req.PriceCents,
+				req.PhotoURL,
+				string(ownerID),
+			).
+			WillReturnError(boom)
+
+		mock.ExpectRollback()
+
+		id, err := dao.CreateAdWithQuota(ctx, req)
+
+		require.ErrorIs(t, err, boom)
+		assert.Zero(t, id)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rolls back when recording publication fails", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+		boom := errors.New("publication insert failed")
+
+		mock.ExpectBegin()
+		expectLock(mock)
+		expectCount(mock, 2)
+		expectInsert(mock, 42)
+
+		mock.ExpectExec("INSERT INTO ad_publications").
+			WithArgs(string(ownerID)).
+			WillReturnError(boom)
+
+		mock.ExpectRollback()
+
+		id, err := dao.CreateAdWithQuota(ctx, req)
+
+		require.ErrorIs(t, err, boom)
+		assert.Zero(t, id)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("returns error when commit fails", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+		boom := errors.New("commit failed")
+
+		mock.ExpectBegin()
+		expectLock(mock)
+		expectCount(mock, 2)
+		expectInsert(mock, 42)
+		expectPublication(mock)
+
+		mock.ExpectCommit().WillReturnError(boom)
+
+		id, err := dao.CreateAdWithQuota(ctx, req)
+
+		require.ErrorIs(t, err, boom)
+		assert.Zero(t, id)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rejects zero publication limit", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		invalid := req
+		invalid.Limit = 0
+
+		id, err := dao.CreateAdWithQuota(ctx, invalid)
+
+		require.Error(t, err)
+		assert.Zero(t, id)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rejects negative publication limit", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		invalid := req
+		invalid.Limit = -1
+
+		id, err := dao.CreateAdWithQuota(ctx, invalid)
+
+		require.Error(t, err)
+		assert.Zero(t, id)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rejects zero publication window", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		invalid := req
+		invalid.Window = 0
+
+		id, err := dao.CreateAdWithQuota(ctx, invalid)
+
+		require.Error(t, err)
+		assert.Zero(t, id)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rejects negative publication window", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		invalid := req
+		invalid.Window = -time.Hour
+
+		id, err := dao.CreateAdWithQuota(ctx, invalid)
+
+		require.Error(t, err)
+		assert.Zero(t, id)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rejects creation inside an existing transaction", func(t *testing.T) {
+		dao, mock := newMockDAO(t)
+
+		mock.ExpectBegin()
+		mock.ExpectRollback()
+
+		tx, err := dao.Begin(ctx)
+		require.NoError(t, err)
+
+		id, err := tx.(*DAO).CreateAdWithQuota(ctx, req)
+
+		require.Error(t, err)
+		assert.Zero(t, id)
+
+		require.NoError(t, tx.Rollback())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}

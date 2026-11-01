@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -244,6 +245,56 @@ func TestMock_ImportAds(t *testing.T) {
 
 		require.ErrorIs(t, err, adsdao.ErrIdempotencyConflict)
 		assert.Nil(t, got)
+	})
+}
+
+func TestMock_CreateAdWithQuota(t *testing.T) {
+	req := adsdao.CreateAdWithQuotaRequest{
+		CreateAdRequest: adsdao.CreateAdRequest{
+			Title:      "bike",
+			PriceCents: 5000,
+			PhotoURL:   "https://example.com/bike.jpg",
+			OwnerID:    "user-1",
+		},
+		Limit:  5,
+		Window: 24 * time.Hour,
+	}
+
+	t.Run("returns generated ID", func(t *testing.T) {
+		m := mock.New(t)
+
+		m.On("CreateAdWithQuota", ctx, req).
+			Return(domain.AdID(7), nil)
+
+		got, err := m.CreateAdWithQuota(ctx, req)
+
+		require.NoError(t, err)
+		assert.Equal(t, domain.AdID(7), got)
+	})
+
+	t.Run("returns publication limit error", func(t *testing.T) {
+		m := mock.New(t)
+
+		m.On("CreateAdWithQuota", ctx, req).
+			Return(domain.AdID(0), adsdao.ErrPublicationLimitExceeded)
+
+		got, err := m.CreateAdWithQuota(ctx, req)
+
+		require.ErrorIs(t, err, adsdao.ErrPublicationLimitExceeded)
+		assert.Zero(t, got)
+	})
+
+	t.Run("returns unexpected database error", func(t *testing.T) {
+		m := mock.New(t)
+		boom := errors.New("database unavailable")
+
+		m.On("CreateAdWithQuota", ctx, req).
+			Return(domain.AdID(0), boom)
+
+		got, err := m.CreateAdWithQuota(ctx, req)
+
+		require.ErrorIs(t, err, boom)
+		assert.Zero(t, got)
 	})
 }
 

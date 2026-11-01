@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	adsdao "github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/dao"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/domain"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/usecase"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/common/middleware"
@@ -162,6 +164,30 @@ func TestHandlerCreateAd(t *testing.T) {
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
+
+	t.Run("returns 429 when publication limit is exceeded", func(t *testing.T) {
+		srv := newCreateAdServer(func(_ context.Context, _ usecase.CreateAdRequest) (domain.AdID, error) {
+			return 0, adsdao.ErrPublicationLimitExceeded
+		})
+		defer srv.Close()
+
+		resp := postJSON(t, srv.URL+"/ads", validBody, "user-1")
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
+	})
+
+	t.Run("returns 429 when publication limit error is wrapped", func(t *testing.T) {
+		srv := newCreateAdServer(func(_ context.Context, _ usecase.CreateAdRequest) (domain.AdID, error) {
+			return 0, fmt.Errorf("unable to create ad: %w", adsdao.ErrPublicationLimitExceeded)
+		})
+		defer srv.Close()
+
+		resp := postJSON(t, srv.URL+"/ads", validBody, "user-1")
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
 	})
 }
 

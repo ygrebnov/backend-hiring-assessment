@@ -327,6 +327,104 @@ func (d *DAO) ImportAds(ctx context.Context, req adsdao.ImportAdsRequest) ([]dom
 	return ids, nil
 }
 
+// CreateAdWithQuota atomically creates an ad if the user has not reached
+// their publication limit within the configured rolling window.
+//
+// A per-user advisory lock serializes concurrent publication attempts,
+// preventing multiple requests from exceeding the quota.
+//
+// Bulk imports use CreateAd directly and do not consume publication quota.
+func (d *DAO) CreateAdWithQuota(
+	ctx context.Context,
+	req adsdao.CreateAdWithQuotaRequest,
+) (domain.AdID, error) {
+	if d.tx != nil {
+		return 0, errors.New("unable to create ad with quota inside an existing transaction")
+	}
+
+	if req.Limit <= 0 {
+		return 0, errors.New("publication limit must be positive")
+	}
+
+	if req.Window <= 0 {
+		return 0, errors.New("publication window must be positive")
+	}
+
+	tx, err := d.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("unable to begin publication: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	store := tx.(*DAO)
+
+	// Serialize publication attempts for the same user.
+	// A hash collision only causes unnecessary serialization
+	// between different users; it cannot bypass the quota.
+	const lockQuery = `
+		SELECT pg_advisory_xact_lock(
+			hashtextextended($1::text, 0)
+		)`
+
+	if _, err := store.tx.ExecContext(
+		ctx,
+		lockQuery,
+		string(req.OwnerID),
+	); err != nil {
+		return 0, fmt.Errorf("unable to acquire publication lock: %w", err)
+	}
+
+	// Count publications in the rolling window.
+	// clock_timestamp() reflects the actual time after acquiring the lock,
+	// unlike now(), which is fixed at the transaction start.
+	const countQuery = `
+		SELECT COUNT(*)
+		FROM ad_publications
+		WHERE user_id = $1::uuid
+		  AND published_at > clock_timestamp() -
+		      ($2::double precision * INTERVAL '1 second')`
+
+	var count int
+
+	if err := store.tx.QueryRowContext(
+		ctx,
+		countQuery,
+		string(req.OwnerID),
+		req.Window.Seconds(),
+	).Scan(&count); err != nil {
+		return 0, fmt.Errorf("unable to count publications: %w", err)
+	}
+
+	if count >= req.Limit {
+		return 0, adsdao.ErrPublicationLimitExceeded
+	}
+
+	// Insert the ad within the same transaction.
+	id, err := store.CreateAd(ctx, req.CreateAdRequest)
+	if err != nil {
+		return 0, fmt.Errorf("unable to create ad: %w", err)
+	}
+
+	// Record quota consumption within the same transaction.
+	const publicationQuery = `
+		INSERT INTO ad_publications (user_id, published_at)
+		VALUES ($1::uuid, clock_timestamp())`
+
+	if _, err := store.tx.ExecContext(
+		ctx,
+		publicationQuery,
+		string(req.OwnerID),
+	); err != nil {
+		return 0, fmt.Errorf("unable to record publication: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("unable to commit publication: %w", err)
+	}
+
+	return id, nil
+}
+
 func scanAd(row *sql.Row) (domain.Ad, error) {
 	var ad domain.Ad
 	if err := row.Scan(&ad.ID, &ad.Title, &ad.Price, &ad.PhotoURL, &ad.UserID, &ad.CreatedAt); err != nil {
