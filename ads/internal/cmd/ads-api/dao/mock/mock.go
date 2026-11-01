@@ -80,6 +80,15 @@ func (m *Mock) ImportAds(ctx context.Context, req adsdao.ImportAdsRequest) ([]do
 	return adIDs, args.Error(1)
 }
 
+// CreateAdWithQuota returns the ad ID and the error set on the mock.
+func (m *Mock) CreateAdWithQuota(ctx context.Context, req adsdao.CreateAdWithQuotaRequest) (domain.AdID, error) {
+	args := m.Called(ctx, req)
+
+	adID, _ := args.Get(0).(domain.AdID)
+
+	return adID, args.Error(1)
+}
+
 // Commit returns the error set on the mock.
 func (m *Mock) Commit() error {
 	return m.Called().Error(0)

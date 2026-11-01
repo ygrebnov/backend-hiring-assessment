@@ -65,16 +65,42 @@ paths:
 
     post:
       summary: Create an ad
+      description: |
+        Creates an ad belonging to the authenticated user.
+
+        Each user may publish at most 5 individual ads within a
+        rolling 24-hour window by default.
+
+        The publication limit and window are configurable through
+        the AD_PUBLICATION_LIMIT and AD_PUBLICATION_WINDOW
+        environment variables.
+
+        The quota is enforced atomically, including when multiple
+        publication requests are submitted concurrently.
+
+        Deleting an ad does not restore the publication quota.
+        A publication continues to count until it falls outside
+        the rolling time window.
+
+        Bulk imports through POST /ads/import are exempt from
+        this quota.
+
+        When the publication limit is reached, the API returns
+        HTTP 429 Too Many Requests without creating an ad.
+
       operationId: createAd
-      tags: [ads]
+      tags: [ ads ]
+
       security:
-        - userID: []
+        - userID: [ ]
+
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/CreateAdBody"
+
       responses:
         "201":
           description: Ad created. The body contains the generated identifier.
@@ -82,10 +108,26 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CreateAdResponse"
+
         "400":
-          description: Malformed or unknown request body field, including missing, conflicting, or invalid price fields.
+          description: |
+            Malformed or unknown request body field, including
+            missing, conflicting, or invalid price fields.
+
         "401":
           description: Missing Authorization header.
+
+        "429":
+          description: |
+            Publication limit exceeded.
+
+            The authenticated user has already published the
+            maximum permitted number of individual ads within
+            the configured rolling time window.
+
+            No ad is created. The client may retry after an
+            existing publication falls outside the window.
+
         "500":
           description: Unexpected server error.
 

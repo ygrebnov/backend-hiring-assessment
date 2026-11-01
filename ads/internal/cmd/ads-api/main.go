@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 
@@ -21,11 +22,14 @@ func main() {
 
 func run() error {
 	ctx := context.Background()
-	cfg := Load()
+	cfg, err := Load()
+	if err != nil {
+		return fmt.Errorf("unable to load configuration: %w", err)
+	}
 
 	adDAO, err := postgres.New(ctx, cfg.DatabaseURL)
 	if err != nil {
-		return err
+		return fmt.Errorf("unable to initialize ads database: %w", err)
 	}
 	defer func() {
 		if err := adDAO.Close(); err != nil {
@@ -35,13 +39,22 @@ func run() error {
 
 	identityClient := identity.New(cfg.IdentityURL, cfg.IdentityTimeout)
 
+	createAdParams := usecase.CreateAdParams{
+		PublicationLimit:  cfg.AdPublicationLimit,
+		PublicationWindow: cfg.AdPublicationWindow,
+	}
+
 	router := http.NewRouter(http.Usecases{
-		CreateAd:  usecase.NewCreateAdFunc(adDAO),
+		CreateAd:  usecase.NewCreateAdFunc(adDAO, createAdParams),
 		GetAd:     usecase.NewGetAdByIDFunc(adDAO, identityClient),
 		ListAds:   usecase.NewListAdsFunc(adDAO),
 		DeleteAd:  usecase.NewDeleteAdByIDFunc(adDAO),
 		ImportAds: usecase.NewImportAdsFunc(adDAO),
 	})
 
-	return httpserver.Run(ctx, cfg.HTTPAddr, router)
+	if errRun := httpserver.Run(ctx, cfg.HTTPAddr, router); errRun != nil {
+		return fmt.Errorf("unable to run HTTP server: %w", errRun)
+	}
+
+	return nil
 }

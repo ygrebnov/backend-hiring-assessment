@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	adsdao "github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/dao"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/usecase"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/ads/internal/cmd/ads-api/util"
 	"github.mpi-internal.com/leboncoin/backend-hiring-assessment/common/middleware"
@@ -73,6 +74,11 @@ func handlerCreateAd(createAd usecase.CreateAdFunc) http.HandlerFunc {
 			OwnerID:    middleware.UserIDFromRequest(r),
 		})
 		if err != nil {
+			if errors.Is(err, adsdao.ErrPublicationLimitExceeded) {
+				rw.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+
 			rw.WriteHeader(http.StatusInternalServerError)
 			return
 		}
