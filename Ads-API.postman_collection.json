@@ -1,0 +1,132 @@
+{
+  "info": {
+    "name": "Ads API",
+    "description": "Ads API endpoints requests.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/health",
+        "description": "Health"
+      }
+    },
+    {
+      "name": "List ads",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/ads",
+        "description": "List ads"
+      }
+    },
+    {
+      "name": "Get ad",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/ads/{{adId}}",
+        "description": "Get ad"
+      }
+    },
+    {
+      "name": "Create ad",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "{{userId}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/ads",
+        "description": "Create ad",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"title\": \"Mountain bike\",\n  \"price\": 150.5,\n  \"photo_url\": \"https://example.com/photos/bike.jpg\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Delete ad",
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "{{userId}}",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/ads/{{adId}}",
+        "description": "Delete ad"
+      }
+    },
+    {
+      "name": "Import ads",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "{{userId}}",
+            "type": "text"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{idempotencyKey}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": "{{baseUrl}}/ads/import",
+        "description": "Import ads. Change idempotencyKey for each new import payload.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ads\": [\n    {\n      \"title\": \"Road bike\",\n      \"price\": 210.0,\n      \"photo_url\": \"https://example.com/photos/road-bike.jpg\"\n    },\n    {\n      \"title\": \"Helmet\",\n      \"price\": 35.5,\n      \"photo_url\": \"https://example.com/photos/helmet.jpg\"\n    }\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:18080"
+    },
+    {
+      "key": "userId",
+      "value": "00000000-0000-0000-0000-000000000001"
+    },
+    {
+      "key": "adId",
+      "value": "1"
+    },
+    {
+      "key": "idempotencyKey",
+      "value": "example-import-001"
+    }
+  ]
+}
